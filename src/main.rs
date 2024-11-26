@@ -8,7 +8,7 @@ use actix_cors::Cors;
 use actix_identity::IdentityMiddleware;
 use actix_session::{config::PersistentSession, storage::CookieSessionStore, SessionMiddleware};
 use actix_web::{
-    cookie::{time::Duration, Key}, http, middleware, web::{self, ServiceConfig}
+    cookie::{time::Duration, Key, SameSite}, http, middleware, web::{self, ServiceConfig}
 };
 use host::AuthUser;
 use room::BingoServer;
@@ -110,8 +110,9 @@ async fn main(
                 .wrap(
                     SessionMiddleware::builder(CookieSessionStore::default(), secret_key.clone())
                         .cookie_name("JSESSIONID".to_owned())
-                        .cookie_secure(false)
+                        .cookie_secure(true)
                         .cookie_http_only(true)
+                        .cookie_same_site(SameSite::None)
                         .session_lifecycle(PersistentSession::default().session_ttl(FIVE_MINUTES))
                         .build(),
                 )
