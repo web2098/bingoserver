@@ -28,6 +28,7 @@ async fn join(
     payload: web::Payload,
     path: web::Path<(RoomId,)>,
     server: web::Data<BingoServerHandle>,
+    _datebase: web::Data<sqlx::PgPool>,
 ) -> Result<HttpResponse, Error> {
     let  (res, mut session, msg_stream ) = actix_ws::handle(&req, payload)?;
 

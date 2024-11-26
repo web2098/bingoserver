@@ -1,18 +1,27 @@
 
+
+use argon2::{
+    password_hash::{
+        PasswordHash, PasswordVerifier
+    },
+    Argon2
+};
 use actix_identity::Identity;
 use actix_web::{
     error, get, web, Error, HttpMessage as _, HttpRequest, HttpResponse, Responder
 };
 use base64::prelude::*;
 use serde::Deserialize;
+use sqlx::types::Uuid;
 use tokio::task::spawn_local;
 
 use crate::{room::{BingoServerHandle, ConnId, RoomCreds, RoomId, USER_HOST}, wshandler::{ws_handler, CommandHandler}};
 
 
-#[derive(serde::Deserialize)]
-struct AuthToken{
-    user: String,
+#[derive(sqlx::FromRow, serde::Deserialize, Debug)]
+pub struct AuthUser{
+    id: Uuid,
+    username: String,
     token: String,
 }
 
@@ -33,10 +42,17 @@ impl Responder for HostResult {
     }
 }
 
+
+pub fn verify_password(user_token: &str, hash_token: &str) -> Result<bool, argon2::password_hash::Error> {
+    let parsed_hash = PasswordHash::new(&hash_token)?;
+    Ok(Argon2::default().verify_password(user_token.as_bytes(), &parsed_hash).is_ok())
+}
+
 #[get("/host")]
 async fn host_room(
     req: HttpRequest,
     server: web::Data<BingoServerHandle>,
+    datebase: web::Data<sqlx::PgPool>,
 ) -> actix_web::Result<impl Responder> {
 
     log::info!("Host request");
@@ -53,25 +69,45 @@ async fn host_room(
     }
     let decoded = decoded.unwrap();
 
-    let auth_token: Result<AuthToken, serde_json::Error> = serde_json::from_slice(&decoded);
+    let auth_token: Result<AuthUser, serde_json::Error> = serde_json::from_slice(&decoded);
     if auth_token.is_err() {
+        log::warn!("Failed to parse Authorization header: {}", auth_token.unwrap_err());
         return Err(error::ErrorUnauthorized("Invalid Authorization header, unexpected format"));
     }
     let auth_token = auth_token.unwrap();
 
-    log::info!("Host request from {}", auth_token.user);
+    log::info!("Host request from {}", auth_token.username);
     // Check if token is valid in the database and matches the user
     // if not return unauthorized
+    //Using auth_token.id look up the user in the database
+    let user_data: AuthUser = sqlx::query_as("SELECT * FROM users WHERE id = $1")
+        .bind(&auth_token.id)
+        .fetch_one(&**datebase)
+        .await
+        .map_err(|_| error::ErrorUnauthorized("Invalid Authorization header, user not found"))?;
+
+    let result = verify_password(&auth_token.token, &user_data.token);
+    match result{
+        Ok(is_valid) => {
+            if !is_valid {
+                return Err(error::ErrorUnauthorized("Invalid Authorization header, token does not match"));
+            }
+        }
+        Err(err) => {
+            log::warn!("Failed to verify token: {}", err);
+            return Err(error::ErrorUnauthorized("Invalid Authorization header, token verification failed"));
+        }
+    }
 
     // attach a verified user identity to the active session
-    Identity::login(&req.extensions(), auth_token.user.clone()).unwrap();
+    Identity::login(&req.extensions(), auth_token.username.clone()).unwrap();
 
     // Find if there is still a valid room of the day
     // if there is no room create a new room
     // return room id
 
-    let room: RoomCreds = server.create_room(auth_token.user.clone()).await;
-    log::info!("Created a room with id {}", room.id);
+    let room: RoomCreds = server.create_room(auth_token.username.clone()).await;
+    log::info!("Created a room with id {} and assigned to {}", room.id, room.host);
 
     Ok(HostResult{room_id: room.id, room_token: room.token})
 }
@@ -124,6 +160,7 @@ async fn start(
     path: web::Path<(RoomId,)>,
     query: web::Query<StartQuery>,
     server: web::Data<BingoServerHandle>,
+    _datebase: web::Data<sqlx::PgPool>,
 ) -> Result<HttpResponse, Error> {
     let user_id = if let Some(user) = user {
         user.id().unwrap()

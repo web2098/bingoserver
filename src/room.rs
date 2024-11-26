@@ -1,27 +1,28 @@
-use std::{collections::{HashMap, HashSet}, io};
+use std::{collections::HashMap, io};
 
-use chrono::Utc;
 use rand::{thread_rng, Rng as _};
 use tokio::sync::{mpsc, oneshot};
 
 
-pub type RoomId = u32;
+pub type RoomId = i32;
 pub type ConnId = u32;
 pub type Msg = String;
 
 pub const USER_HOST : ConnId = 0;
 pub const USER_CLIENT : ConnId = 1;
 
-#[derive(Debug)]
+#[derive(sqlx::FromRow, Debug)]
 pub struct RoomCreds{
     pub id: RoomId,
+    pub host: String,
     pub token: String,
 }
 
 impl RoomCreds{
-    pub fn new(id: RoomId, token: String) -> Self {
+    pub fn new(id: RoomId, host: String, token: String) -> Self {
         Self{
             id,
+            host,
             token,
         }
     }
@@ -76,7 +77,6 @@ enum Command {
 #[derive(Debug)]
 struct Room{
     id: RoomId,
-    creation_time: i64,
     host: String,
     host_token: String,
     host_pipe: mpsc::UnboundedSender<Msg>,
@@ -87,14 +87,12 @@ struct Room{
 impl Room{
     pub fn new(host: String) -> Self {
         let id = thread_rng().gen::<RoomId>();
-        let creation_time = Utc::now().timestamp();
         let sessions = HashMap::new();
         //Generated HOST ID has a 256 bit length UUID
         let host_token = thread_rng().gen::<[u8; 32]>().to_vec().iter().map(|x| format!("{:02x}", x)).collect::<String>();
 
         Self{
             id,
-            creation_time,
             host,
             host_token,
             host_pipe: mpsc::unbounded_channel().0,
@@ -156,16 +154,20 @@ pub struct BingoServer {
 
     /// Command receiver.
     cmd_rx: mpsc::UnboundedReceiver<Command>,
+
+    /// Postgres database pool
+    database: sqlx::PgPool,
 }
 
 impl BingoServer{
-    pub fn new() -> (Self, BingoServerHandle){
+    pub fn new(database: sqlx::PgPool) -> (Self, BingoServerHandle){
         let rooms = HashMap::with_capacity(0);
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         (
             Self{
                 rooms,
                 cmd_rx,
+                database,
             },
             BingoServerHandle{
                 cmd_tx: cmd_tx.clone(),
@@ -175,19 +177,48 @@ impl BingoServer{
 
     pub async fn create_room(&mut self, host: String) -> RoomCreds {
 
+        //CHeck if host is already created a room in the database look up using the host
+        let result = sqlx::query_as::<_, RoomCreds>("SELECT * FROM rooms WHERE host = $1")
+            .bind(host.clone())
+            .fetch_optional(&self.database)
+            .await;
+
+        match result {
+            Ok(room) => {
+                if room.is_some(){
+                    return room.unwrap();
+                }
+            }
+            Err(e) => log::error!("Failed to look up room for host {}: {}", host, e),
+        }
+
+
         // Check if rooms contains a room with the same host
         for room in self.rooms.values(){
             if room.host == host{
-                return RoomCreds::new(room.id, room.host_token.clone());
+                return RoomCreds::new(room.id, host, room.host_token.clone());
             }
         }
 
-        let room= Room::new(host);
+        let room= Room::new(host.clone());
         let room_id = room.id;
         let room_token = room.host_token.clone();
         self.rooms.insert(room_id, room);
 
-        RoomCreds::new(room_id, room_token)
+        //Insert room creds into the rooms table
+        let result = sqlx::query("INSERT INTO rooms (id, host, token) VALUES ($1, $2, $3)")
+            .bind(room_id)
+            .bind(host.clone())
+            .bind(room_token.clone())
+            .execute(&self.database)
+            .await;
+
+        match result {
+            Ok(_) => log::info!("Added room {} to database", room_id),
+            Err(e) => log::error!("Failed to add room {} to database: {}", room_id, e),
+        }
+
+        RoomCreds::new(room_id, host, room_token)
     }
 
     pub async fn room_exists(&self, room_id: RoomId) -> bool {
