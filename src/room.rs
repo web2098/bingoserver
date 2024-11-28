@@ -100,6 +100,17 @@ impl Room{
         }
     }
 
+    pub fn create_from_entry(host: String, id: RoomId, host_token: String) -> Self {
+        let sessions = HashMap::new();
+        Self{
+            id,
+            host,
+            host_token,
+            host_pipe: mpsc::unbounded_channel().0,
+            sessions,
+        }
+    }
+
     pub async fn add_client(&mut self, tx: mpsc::UnboundedSender<Msg>, user_type: ConnId) -> ConnId {
 
         if user_type == USER_HOST
@@ -175,6 +186,28 @@ impl BingoServer{
         )
     }
 
+    pub async fn populate_rooms(&mut self){
+
+        let result = sqlx::query_as::<_, RoomCreds>("SELECT * FROM rooms")
+        .fetch_all(&self.database)
+        .await;
+
+        match result {
+            Ok(rows) =>
+            {
+                for row in rows
+                {
+                    let room = Room::create_from_entry(row.host, row.id, row.token);
+                    self.rooms.insert(row.id, room);
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to load rooms from database: {}", e)
+            },
+        }
+
+    }
+
     pub async fn create_room(&mut self, host: String) -> RoomCreds {
 
         //CHeck if host is already created a room in the database look up using the host
@@ -228,9 +261,15 @@ impl BingoServer{
     pub async fn has_room_host_privileges(&self, room_id: RoomId, host_token: String) -> bool {
         let room = self.rooms.get(&room_id);
         match room {
-            None => {return false;}
+            None => {
+                log::error!("Room {} not found", room_id);
+                return false;}
             Some(room) => {
-                return room.host_token == host_token;
+                let result = room.host_token == host_token;
+                if !result{
+                    log::error!("Host token mismatch for room {}", room_id);
+                }
+                return result;
             }
         }
     }
