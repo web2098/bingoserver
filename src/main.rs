@@ -94,8 +94,8 @@ async fn main(
 
     let secret_key = Key::generate();
 
-
-    let (server, server_tx) = BingoServer::new(pool.clone());
+    let (mut server, server_tx) = BingoServer::new(pool.clone());
+    server.populate_rooms().await;
     let _server = spawn(server.run());
 
     let config = move |cfg: &mut ServiceConfig| {
