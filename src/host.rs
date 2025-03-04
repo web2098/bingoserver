@@ -177,7 +177,7 @@ async fn start(
         return Err(actix_web::error::ErrorNotFound("Room not found"));
     }
 
-    log::info!("Welcome {} as host for room {}", user_id, path.0);
+    tracing::info!("Welcome {} as host for room {}", user_id, path.0);
     // spawn websocket handler (and don't await it) so that the response is returned immediately
     spawn_local(ws_handler(
         server.clone(),

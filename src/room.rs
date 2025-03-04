@@ -1,6 +1,6 @@
 use std::{collections::HashMap, io};
 
-use rand::{thread_rng, Rng as _};
+use rand::{rng, Rng as _};
 use tokio::sync::{mpsc, oneshot};
 
 
@@ -86,10 +86,10 @@ struct Room{
 
 impl Room{
     pub fn new(host: String) -> Self {
-        let id = thread_rng().gen::<RoomId>();
+        let id = rng().random::<RoomId>();
         let sessions = HashMap::new();
         //Generated HOST ID has a 256 bit length UUID
-        let host_token = thread_rng().gen::<[u8; 32]>().to_vec().iter().map(|x| format!("{:02x}", x)).collect::<String>();
+        let host_token = rng().random::<[u8; 32]>().to_vec().iter().map(|x| format!("{:02x}", x)).collect::<String>();
 
         Self{
             id,
@@ -119,8 +119,8 @@ impl Room{
             return 0;
         }
         // register session with random connection ID
-        let id = thread_rng().gen::<ConnId>();
-        log::info!("Adding client {} to room {}", id, self.id);
+        let id = rng().random::<ConnId>();
+        tracing::info!("Adding client {} to room {}", id, self.id);
         self.sessions.insert(id, tx);
 
         id
@@ -132,7 +132,7 @@ impl Room{
             self.host_pipe = mpsc::unbounded_channel().0;
             return;
         }
-        log::info!("Removing client {} from room {}", conn_id, self.id);
+        tracing::info!("Removing client {} from room {}", conn_id, self.id);
         self.sessions.remove(&conn_id);
     }
 
