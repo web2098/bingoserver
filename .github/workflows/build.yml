@@ -1,0 +1,30 @@
+name: Build on Pull Request
+
+on:
+  pull_request:
+    branches:
+      - '**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          components: rustfmt, clippy
+
+      - name: Install dependencies
+        run: cargo fetch
+
+      - name: Build project
+        run: cargo build --release
+
+      - name: Run tests
+        run: cargo test --release
